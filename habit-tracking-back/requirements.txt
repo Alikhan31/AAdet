@@ -1,0 +1,26 @@
+# FastAPI & server
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+aiosqlite==0.20.0
+
+# Auth & security
+python-jose[cryptography]==3.3.0
+bcrypt>=4.0.0
+python-multipart==0.0.17
+
+# Config & validation
+pydantic[email]==2.10.3
+pydantic-settings==2.6.1
+
+# Dev (optional)
+python-dotenv==1.0.1
+
+# OAuth
+httpx==0.27.2
+
+# Analytics / NLP
+vaderSentiment==3.3.2
