@@ -1,10 +1,10 @@
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete as sql_delete, or_, and_
 
 from app.database import get_db
-from app.models import User, Habit, HabitCompletion
+from app.models import User, Habit, HabitCompletion, Friendship, ActivityEvent, HabitVisibleTo
 from app.schemas.habit import (
     HabitCreate,
     HabitUpdate,
@@ -18,6 +18,52 @@ from app.services.activity_feed import create_event as create_activity_event
 from app.services.analytics import recompute_streaks_and_xp
 
 router = APIRouter(prefix="/habits", tags=["habits"])
+
+
+@router.get("/public/{user_id}", response_model=list[HabitResponse])
+async def get_public_habits(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[Habit]:
+    """Return another user's friend-visible habits. Requires an accepted friendship."""
+    if user_id == current_user.id:
+        # Own profile — return all
+        result = await db.execute(select(Habit).where(Habit.user_id == current_user.id))
+        return list(result.scalars().all())
+
+    # Verify accepted friendship in either direction
+    fs_result = await db.execute(
+        select(Friendship).where(
+            or_(
+                and_(Friendship.user_id == current_user.id, Friendship.friend_id == user_id),
+                and_(Friendship.user_id == user_id, Friendship.friend_id == current_user.id),
+            ),
+            Friendship.status == "accepted",
+        )
+    )
+    if fs_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not friends with this user")
+
+    # Include habits visible to "friends" (all friends) or "selected" if current_user is in the list
+    all_result = await db.execute(
+        select(Habit).where(Habit.user_id == user_id, Habit.visibility.in_(["friends", "selected"]))
+    )
+    habits = list(all_result.scalars().all())
+
+    # Filter out "selected" habits where current user is not in the list
+    selected_habit_ids = [h.id for h in habits if h.visibility == "selected"]
+    allowed_selected: set[int] = set()
+    if selected_habit_ids:
+        vt_result = await db.execute(
+            select(HabitVisibleTo).where(
+                HabitVisibleTo.habit_id.in_(selected_habit_ids),
+                HabitVisibleTo.user_id == current_user.id,
+            )
+        )
+        allowed_selected = {row.habit_id for row in vt_result.scalars().all()}
+
+    return [h for h in habits if h.visibility == "friends" or h.id in allowed_selected]
 
 
 @router.get("", response_model=list[HabitResponse])
@@ -55,6 +101,7 @@ async def create_habit(
     db.add(habit)
     await db.flush()
     await db.refresh(habit)
+    await recompute_streaks_and_xp(current_user.id, db)
     return habit
 
 
@@ -106,6 +153,7 @@ async def delete_habit(
     if habit is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Habit not found")
     await db.delete(habit)
+    await recompute_streaks_and_xp(current_user.id, db)
     return None
 
 
@@ -273,4 +321,53 @@ async def remove_completion(
     if completion is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Completion not found")
     await db.delete(completion)
+    # Remove the corresponding feed event so the friend feed stays clean
+    await db.execute(
+        sql_delete(ActivityEvent).where(
+            ActivityEvent.user_id == current_user.id,
+            ActivityEvent.event_type == "habit_completed",
+            ActivityEvent.payload["habit_id"].as_integer() == habit_id,
+            ActivityEvent.payload["completed_date"].as_string() == str(completed_date),
+        )
+    )
+    await recompute_streaks_and_xp(current_user.id, db)
+    return None
+
+
+# --- Habit visibility (selected friends) ---
+
+@router.get("/{habit_id}/visible-to", response_model=list[int])
+async def get_visible_to(
+    habit_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[int]:
+    """Return user_ids of friends who can see this habit (only relevant when visibility='selected')."""
+    result = await db.execute(
+        select(Habit).where(Habit.id == habit_id, Habit.user_id == current_user.id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Habit not found")
+
+    vt = await db.execute(select(HabitVisibleTo).where(HabitVisibleTo.habit_id == habit_id))
+    return [row.user_id for row in vt.scalars().all()]
+
+
+@router.put("/{habit_id}/visible-to", status_code=status.HTTP_204_NO_CONTENT)
+async def set_visible_to(
+    habit_id: int,
+    user_ids: list[int],
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Replace the visible-to list for this habit (full replace, not append)."""
+    result = await db.execute(
+        select(Habit).where(Habit.id == habit_id, Habit.user_id == current_user.id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Habit not found")
+
+    await db.execute(sql_delete(HabitVisibleTo).where(HabitVisibleTo.habit_id == habit_id))
+    for uid in set(user_ids):
+        db.add(HabitVisibleTo(habit_id=habit_id, user_id=uid))
     return None

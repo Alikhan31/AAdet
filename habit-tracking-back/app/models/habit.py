@@ -24,6 +24,12 @@ class Habit(Base):
     days_of_week: Mapped[list] = mapped_column(
         JSON, default=lambda: list(range(7)), nullable=False
     )
+    # visibility: "friends" = all friends can see it, "private" = only owner
+    visibility: Mapped[str] = mapped_column(String(16), default="friends", nullable=False)
+    # category: e.g. "health", "mind", "work", "lifestyle", "other"
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # icon: lucide icon key, e.g. "heart", "brain", "dumbbell"
+    icon: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -12,10 +12,55 @@ class UserStatsResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DayCount(BaseModel):
+    date: date
+    count: int
+
+
+class BadgeResponse(BaseModel):
+    id: str
+    title: str
+    category: str
+    threshold: int
+    value: int
+    earned: bool
+
+
+class HabitStreakResponse(BaseModel):
+    habit_id: int
+    habit_name: str
+    current_streak_days: int
+    longest_streak_days: int
+
+
+class LeaderboardEntryResponse(BaseModel):
+    user_id: int
+    name: str
+    initials: str
+    total_xp: int
+    rank: int
+    is_me: bool
+
+
+class LeaderboardResponse(BaseModel):
+    period: str                  # "total" | "month"
+    month: str | None = None     # YYYY-MM for month mode
+    entries: list[LeaderboardEntryResponse]
+    me_rank: int | None
+    me_xp: int
+
+
 class AnalyticsSummaryResponse(BaseModel):
     stats: UserStatsResponse
-    completions_this_week: int
     completions_today: int
+    completions_this_week: int
+    possible_this_week: int       # scheduled habit-slots this week (for consistency %)
+    total_completions: int        # all-time total habit completions
+    habits_count: int             # number of active habits
+    last_7_days: list[DayCount]   # per-day completion counts for bar chart
+    best_weekday: str | None      # name of weekday with most completions historically
+    badges: list[BadgeResponse]
+    habit_streaks: list[HabitStreakResponse]
 
 
 # --- Sentiment ---

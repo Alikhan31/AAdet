@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import User, Friendship
@@ -8,10 +9,6 @@ from app.schemas.friend import FriendCreate, FriendResponse, FriendRequestRespon
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/friends", tags=["friends"])
-
-
-def _other_user(fs: Friendship, current_user_id: int) -> User:
-    return fs.friend if fs.user_id == current_user_id else fs.user
 
 
 def _existing_friendship_filter(uid: int, fid: int):
@@ -100,6 +97,9 @@ async def list_pending_requests(
     return out
 
 
+
+
+
 @router.get("", response_model=list[FriendResponse])
 async def list_friends(
     current_user: User = Depends(get_current_user),
@@ -109,6 +109,7 @@ async def list_friends(
 ):
     result = await db.execute(
         select(Friendship)
+        .options(selectinload(Friendship.user), selectinload(Friendship.friend))
         .where(
             or_(Friendship.user_id == current_user.id, Friendship.friend_id == current_user.id),
             Friendship.status == "accepted",
@@ -119,7 +120,7 @@ async def list_friends(
     rows = result.scalars().all()
     out = []
     for fs in rows:
-        other = _other_user(fs, current_user.id)
+        other = fs.friend if fs.user_id == current_user.id else fs.user
         out.append(
             FriendResponse(
                 id=other.id,
@@ -176,27 +177,26 @@ async def accept_friend_request(
 ):
     """Accept an incoming friend request. Only the recipient can accept."""
     result = await db.execute(
-        select(Friendship).where(
+        select(Friendship, User)
+        .join(User, User.id == Friendship.user_id)
+        .where(
             Friendship.id == friendship_id,
             Friendship.friend_id == current_user.id,
             Friendship.status == "pending",
         )
     )
-    fs = result.scalar_one_or_none()
-    if fs is None:
+    row = result.one_or_none()
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending request not found")
 
+    fs, requester = row
     fs.status = "accepted"
     await db.flush()
-    await db.refresh(fs)
-
-    requester_result = await db.execute(select(User).where(User.id == fs.user_id))
-    requester = requester_result.scalar_one()
     return FriendResponse(
         id=requester.id,
         email=requester.email,
         full_name=requester.full_name,
-        status=fs.status,
+        status="accepted",
         created_at=fs.created_at,
     )
 

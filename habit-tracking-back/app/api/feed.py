@@ -3,7 +3,7 @@ from sqlalchemy import select, or_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import User, Friendship, ActivityEvent, Reaction, FeedComment
+from app.models import User, Friendship, ActivityEvent, Reaction, FeedComment, Habit, HabitVisibleTo
 from app.schemas.activity import (
     ActivityFeedItemResponse,
     ReactionCreate,
@@ -54,6 +54,51 @@ async def get_activity_feed(
         .limit(limit)
     )
     events_with_users = result.all()
+    if not events_with_users:
+        return []
+
+    # --- Visibility filter ---
+    # Collect habit_ids from habit_completed events
+    habit_id_by_event: dict[int, int] = {}
+    for event, _ in events_with_users:
+        if event.event_type == "habit_completed" and event.payload:
+            hid = event.payload.get("habit_id")
+            if isinstance(hid, int):
+                habit_id_by_event[event.id] = hid
+
+    unique_habit_ids = list(set(habit_id_by_event.values()))
+    habits_visibility: dict[int, str] = {}
+    if unique_habit_ids:
+        h_result = await db.execute(select(Habit).where(Habit.id.in_(unique_habit_ids)))
+        for h in h_result.scalars().all():
+            habits_visibility[h.id] = h.visibility
+
+    # For "selected" habits, load which users are allowed to see them
+    selected_habit_ids = [hid for hid, vis in habits_visibility.items() if vis == "selected"]
+    allowed_viewer: set[int] = set()  # habit_ids where current_user is in the visible-to list
+    if selected_habit_ids:
+        vt_result = await db.execute(
+            select(HabitVisibleTo).where(
+                HabitVisibleTo.habit_id.in_(selected_habit_ids),
+                HabitVisibleTo.user_id == current_user.id,
+            )
+        )
+        allowed_viewer = {row.habit_id for row in vt_result.scalars().all()}
+
+    def _visible(event: "ActivityEvent") -> bool:
+        if event.user_id == current_user.id:
+            return True  # always show your own events to yourself
+        hid = habit_id_by_event.get(event.id)
+        if hid is None:
+            return True
+        vis = habits_visibility.get(hid, "friends")
+        if vis == "private":
+            return False
+        if vis == "selected":
+            return hid in allowed_viewer
+        return True  # "friends"
+
+    events_with_users = [(e, u) for e, u in events_with_users if _visible(e)]
     if not events_with_users:
         return []
 

@@ -2,6 +2,8 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 
+VISIBILITY_OPTIONS = {"friends", "private"}
+
 class HabitBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
@@ -9,6 +11,9 @@ class HabitBase(BaseModel):
     target_count: int = Field(default=1, ge=1, le=100)
     # 0=Mon … 6=Sun. Default = every day.
     days_of_week: list[int] = Field(default_factory=lambda: list(range(7)))
+    visibility: str = Field(default="friends")
+    category: str | None = Field(None, max_length=64)
+    icon: str | None = Field(None, max_length=64)
 
     @classmethod
     def __get_validators__(cls):
@@ -31,6 +36,9 @@ class HabitUpdate(BaseModel):
     frequency: str | None = Field(None, max_length=64)
     target_count: int | None = Field(None, ge=1, le=100)
     days_of_week: list[int] | None = None
+    visibility: str | None = None
+    category: str | None = Field(None, max_length=64)
+    icon: str | None = Field(None, max_length=64)
 
 
 class HabitResponse(HabitBase):

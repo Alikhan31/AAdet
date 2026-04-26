@@ -7,6 +7,7 @@ from app.models.activity_event import ActivityEvent
 from app.models.notification import Notification
 from app.models.reaction import Reaction
 from app.models.feed_comment import FeedComment
+from app.models.habit_visible_to import HabitVisibleTo
 
 __all__ = [
     "User",
@@ -18,4 +19,5 @@ __all__ = [
     "Notification",
     "Reaction",
     "FeedComment",
+    "HabitVisibleTo",
 ]
