@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "HabitFlow",
-    "slug": "habitflow",
+    "name": "Adet",
+    "slug": "adet",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "scheme": "habitflow",
+    "scheme": "adet",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",

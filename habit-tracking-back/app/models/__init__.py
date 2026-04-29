@@ -8,6 +8,8 @@ from app.models.notification import Notification
 from app.models.reaction import Reaction
 from app.models.feed_comment import FeedComment
 from app.models.habit_visible_to import HabitVisibleTo
+from app.models.user_profile import UserProfile
+from app.models.shared_habit import SharedHabitGroup, SharedHabitMember
 
 __all__ = [
     "User",
@@ -20,4 +22,7 @@ __all__ = [
     "Reaction",
     "FeedComment",
     "HabitVisibleTo",
+    "UserProfile",
+    "SharedHabitGroup",
+    "SharedHabitMember",
 ]

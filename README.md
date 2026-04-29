@@ -1,4 +1,4 @@
-# HabitFlow (monorepo)
+# Adet (monorepo)
 
 This repo contains:
 - `habit-tracking-back` — FastAPI backend (JWT auth, habits, analytics, friends, feed)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**HabitFlow** — a full-stack social habit tracking app. Monorepo with a Python/FastAPI backend and a Next.js frontend, orchestrated via Docker Compose.
+**Adet** — a full-stack social habit tracking app. Monorepo with a Python/FastAPI backend and a Next.js frontend, orchestrated via Docker Compose.
 
 ## Commands
 
@@ -55,7 +55,7 @@ Database: SQLite by default (dev), PostgreSQL in Docker. Switching is via `DATAB
 Single-page app using Next.js App Router with a tab-navigation shell:
 
 - **`components/app-shell.tsx`** — top-level tab navigator (Home / Friends / Stats / AI Coach / Profile)
-- **`components/auth-gate.tsx`** — render-prop wrapper that reads JWT from `localStorage` (`habitflow_token`), validates via `GET /api/auth/me`, and passes `{ token, user, logout }` to children. No server-side auth or middleware.
+- **`components/auth-gate.tsx`** — render-prop wrapper that reads JWT from `localStorage` (`adet_token`), validates via `GET /api/auth/me`, and passes `{ token, user, logout }` to children. No server-side auth or middleware.
 - **`lib/api.ts`** — typed `apiFetch` wrapper; all API calls live here under `api.auth.*`, `api.habits.*`, etc.
 - **`lib/auth.ts`** — `localStorage` helpers: `getStoredToken`, `setStoredToken`, `clearStoredToken`
 - **`components/ui/`** — shadcn/ui components (Radix UI primitives, ~30 components)

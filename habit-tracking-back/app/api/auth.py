@@ -1,3 +1,6 @@
+import uuid
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
@@ -7,36 +10,107 @@ import httpx
 from urllib.parse import urlencode
 
 from app.database import get_db
-from app.models import User
+from app.models import User, UserStats
 from app.schemas.user import UserCreate, UserResponse
 from app.schemas.auth import Token
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.config import get_settings
+from app.api.deps import get_current_user
+from app.services.email import send_verification_email as _send_email_sync
+
+
+async def _dispatch_email(to_email: str, token: str) -> None:
+    from app.config import get_settings
+    if get_settings().redis_url:
+        from app.tasks.email_tasks import send_verification_email_task
+        send_verification_email_task.delay(to_email, token)
+    else:
+        await _send_email_sync(to_email, token)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
 
 
-@router.post("/register", response_model=UserResponse)
+def _make_verification_token() -> tuple[str, datetime]:
+    token = str(uuid.uuid4())
+    expires = datetime.now(timezone.utc) + timedelta(hours=24)
+    return token, expires
+
+
+@router.post("/register")
 async def register(
     payload: UserCreate,
     db: AsyncSession = Depends(get_db),
-) -> User:
+) -> dict:
     result = await db.execute(select(User).where(User.email == payload.email))
     if result.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered",
         )
+    token, expires = _make_verification_token()
     user = User(
         email=payload.email,
         hashed_password=get_password_hash(payload.password),
         full_name=payload.full_name,
+        is_verified=False,
+        verification_token=token,
+        verification_token_expires=expires,
     )
     db.add(user)
     await db.flush()
-    await db.refresh(user)
-    return user
+    db.add(UserStats(user_id=user.id))
+    await db.flush()
+
+    await _dispatch_email(payload.email, token)
+
+    return {"message": f"Verification email sent to {payload.email}"}
+
+
+@router.post("/resend-verification")
+async def resend_verification(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    email = payload.get("email", "").strip()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    # Always return 200 to avoid leaking which emails exist
+    if user and not user.is_verified:
+        token, expires = _make_verification_token()
+        user.verification_token = token
+        user.verification_token_expires = expires
+        await db.flush()
+        await _dispatch_email(email, token)
+    return {"message": "If your email is registered and unverified, a new link has been sent."}
+
+
+@router.get("/verify-email")
+async def verify_email(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(select(User).where(User.verification_token == token))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification link")
+    if user.is_verified:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already verified")
+    now = datetime.now(timezone.utc)
+    expires = user.verification_token_expires
+    if expires is not None:
+        # Make expires timezone-aware if it's naive (SQLite stores naive datetimes)
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if now > expires:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification link has expired")
+    user.is_verified = True
+    user.verification_token = None
+    user.verification_token_expires = None
+    await db.flush()
+
+    access_token = create_access_token(subject=user.id)
+    return {"access_token": access_token, "token_type": "bearer", "message": "Email verified successfully"}
 
 
 @router.post("/login", response_model=Token)
@@ -68,8 +142,18 @@ async def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user",
         )
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email before signing in",
+        )
     access_token = create_access_token(subject=user.id)
     return Token(access_token=access_token)
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_me(current_user: User = Depends(get_current_user)) -> User:
+    return current_user
 
 
 @router.post("/forgot-password")
@@ -176,17 +260,22 @@ async def google_oauth_callback(
             user.google_id = google_id
         if not user.full_name and full_name:
             user.full_name = full_name
+        # Google already verified the email
+        if not user.is_verified:
+            user.is_verified = True
         await db.flush()
     else:
-        # Create new user
+        # Create new user — Google email is already verified
         user = User(
             email=email,
             google_id=google_id,
             full_name=full_name,
-            hashed_password=None,  # OAuth users don't have password
+            hashed_password=None,
+            is_verified=True,
         )
         db.add(user)
         await db.flush()
+        db.add(UserStats(user_id=user.id))
 
     await db.refresh(user)
 

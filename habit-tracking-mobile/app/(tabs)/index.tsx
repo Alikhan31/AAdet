@@ -10,10 +10,11 @@ import {
   Heart, Activity, Brain, BookOpen, Coffee, Target, Star, Zap,
   Sun, Moon, Smile, Home, Music, Code2, Clock, Leaf,
   Award, Droplets, Camera, Globe, Lightbulb, Headphones,
-  ShoppingBag, Plane, BarChart2, Dumbbell,
+  ShoppingBag, Plane, BarChart2, Dumbbell, UserPlus, LogOut,
 } from "lucide-react-native";
+import * as SecureStore from "expo-secure-store";
 import { getToken } from "../../lib/auth";
-import { api, HabitResponse, FriendResponse } from "../../lib/api";
+import { api, HabitResponse, FriendResponse, ShareInfo, SharedHabitMemberStat } from "../../lib/api";
 import { colors, card, banner, radius, avatarColors } from "../../lib/theme";
 
 // ── Icon registry ──────────────────────────────────────────────────────────────
@@ -56,8 +57,14 @@ function HabitIcon({ iconKey, size, color }: { iconKey: string | null; size: num
   return <Icon size={size} color={color} />;
 }
 
-function todayStr() { return new Date().toISOString().slice(0, 10); }
-function formatDate(d: Date) { return d.toISOString().slice(0, 10); }
+function localDateStr(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function todayStr() { return localDateStr(new Date()); }
+function formatDate(d: Date) { return localDateStr(d); }
 function getGreeting() {
   const h = new Date().getHours();
   if (h < 12) return "Good morning";
@@ -166,15 +173,22 @@ interface HabitState {
   habit: HabitResponse; dates: Set<string>; note: string; streak: number; index: number;
 }
 
-function HabitCard({ hs, token, onToggle, onEdit }: {
-  hs: HabitState; token: string; onToggle: () => void; onEdit: () => void;
+function HabitCard({ hs, token, shareInfo, onToggle, onEdit, onShare, onLeave }: {
+  hs: HabitState; token: string; shareInfo?: ShareInfo;
+  onToggle: () => void; onEdit: () => void;
+  onShare: () => void; onLeave: () => void;
 }) {
   const today = todayStr();
   const done = hs.dates.has(today);
   const color = hs.habit.category ? categoryColor(hs.habit.category) : habitColor(hs.index);
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteText, setNoteText] = useState(hs.note);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [members, setMembers] = useState<SharedHabitMemberStat[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isShared = shareInfo && shareInfo.group_id !== null;
+  const isOwner = shareInfo?.is_owner ?? true;
 
   useEffect(() => { setNoteText(hs.note); }, [hs.note]);
 
@@ -186,6 +200,27 @@ function HabitCard({ hs, token, onToggle, onEdit }: {
     }, 800);
   }
 
+  async function toggleMembers() {
+    if (!membersOpen && isShared) {
+      try {
+        const m = await api.sharedHabits.members(token, hs.habit.id);
+        setMembers(m);
+      } catch {}
+    }
+    setMembersOpen(v => !v);
+  }
+
+  function handleLeave() {
+    const title = isOwner ? "Dissolve shared habit?" : "Leave shared habit?";
+    const msg = isOwner
+      ? "This will remove all members from the shared habit."
+      : "You will no longer share progress with the group.";
+    Alert.alert(title, msg, [
+      { text: "Cancel", style: "cancel" },
+      { text: isOwner ? "Dissolve" : "Leave", style: "destructive", onPress: onLeave },
+    ]);
+  }
+
   return (
     <View style={[card, { marginBottom: 10, opacity: done ? 0.85 : 1 }]}>
       <View style={hc.row}>
@@ -195,6 +230,12 @@ function HabitCard({ hs, token, onToggle, onEdit }: {
         <View style={{ flex: 1 }}>
           <Text style={[hc.name, done && hc.nameDone]} numberOfLines={1}>{hs.habit.name}</Text>
           {hs.habit.description ? <Text style={hc.desc} numberOfLines={1}>{hs.habit.description}</Text> : null}
+          {isShared && (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 }}>
+              <Users size={11} color={colors.primary} />
+              <Text style={{ fontSize: 11, color: colors.primary }}>Shared</Text>
+            </View>
+          )}
         </View>
         <View style={hc.actions}>
           {hs.streak > 0 && (
@@ -203,17 +244,29 @@ function HabitCard({ hs, token, onToggle, onEdit }: {
               <Text style={hc.streakTxt}>{hs.streak}</Text>
             </View>
           )}
+          {isShared && (
+            <TouchableOpacity onPress={toggleMembers} style={hc.iconBtn}>
+              <Users size={15} color={membersOpen ? colors.primary : colors.mutedFg} />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity onPress={() => setNoteOpen(v => !v)} style={hc.iconBtn}>
             {noteOpen ? <ChevronUp size={16} color={colors.mutedFg} /> : <ChevronDown size={16} color={colors.mutedFg} />}
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => {}} style={hc.iconBtn}>
-            {hs.habit.visibility === "friends"
-              ? <Eye size={16} color={colors.mutedFg} />
-              : <EyeOff size={16} color={colors.mutedFg} />}
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onEdit} style={hc.iconBtn}>
-            <Pencil size={14} color={colors.mutedFg} />
-          </TouchableOpacity>
+          {(!isShared || isOwner) && (
+            <>
+              <TouchableOpacity onPress={onShare} style={hc.iconBtn}>
+                <UserPlus size={14} color={colors.mutedFg} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onEdit} style={hc.iconBtn}>
+                <Pencil size={14} color={colors.mutedFg} />
+              </TouchableOpacity>
+            </>
+          )}
+          {isShared && (
+            <TouchableOpacity onPress={handleLeave} style={hc.iconBtn}>
+              <LogOut size={14} color={colors.destructive} />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity onPress={onToggle}>
             {done
               ? <CheckCircle2 size={26} color={colors.primary} />
@@ -221,6 +274,33 @@ function HabitCard({ hs, token, onToggle, onEdit }: {
           </TouchableOpacity>
         </View>
       </View>
+
+      {membersOpen && members.length > 0 && (
+        <View style={{ paddingHorizontal: 14, paddingBottom: 12 }}>
+          <View style={{ backgroundColor: colors.muted, borderRadius: radius.md, overflow: "hidden" }}>
+            <View style={{ flexDirection: "row", paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+              <Text style={[hc.memberHeader, { flex: 1 }]}>Member</Text>
+              <Text style={[hc.memberHeader, { width: 50, textAlign: "center" }]}>Streak</Text>
+              <Text style={[hc.memberHeader, { width: 50, textAlign: "center" }]}>Rate</Text>
+            </View>
+            {members.map(m => {
+              const displayName = m.full_name ?? m.email;
+              return (
+              <View key={m.user_id} style={{ flexDirection: "row", paddingHorizontal: 12, paddingVertical: 8, alignItems: "center", borderBottomWidth: 1, borderBottomColor: colors.border + "60" }}>
+                <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  {m.is_owner && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary }} />}
+                  <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: m.is_owner ? "600" : "400" }} numberOfLines={1}>{displayName}</Text>
+                </View>
+                <View style={{ width: 50, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 }}>
+                  <Flame size={12} color="#f97316" />
+                  <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: "600" }}>{m.streak}</Text>
+                </View>
+                <Text style={{ width: 50, color: colors.primary, fontSize: 13, fontWeight: "600", textAlign: "center" }}>{m.completion_rate}%</Text>
+              </View>
+            )})}
+          </View>
+        </View>
+      )}
 
       {noteOpen && (
         <View style={{ paddingHorizontal: 14, paddingBottom: 10 }}>
@@ -253,6 +333,7 @@ const hc = StyleSheet.create({
   streakTxt: { fontSize: 11, fontWeight: "600", color: "#92400e" },
   iconBtn: { padding: 4 },
   noteInput: { backgroundColor: colors.muted, borderRadius: radius.md, padding: 10, color: colors.foreground, fontSize: 14, minHeight: 60 },
+  memberHeader: { color: colors.mutedFg, fontSize: 11, fontWeight: "600", textTransform: "uppercase" },
 });
 
 type VisOption = "friends" | "selected" | "private";
@@ -541,6 +622,79 @@ const em = StyleSheet.create({
   deleteTxt: { color: colors.destructive, fontWeight: "600", fontSize: 16 },
 });
 
+function ShareModal({ visible, habitId, habitName, token, onClose }: {
+  visible: boolean; habitId: number | null; habitName: string; token: string; onClose: () => void;
+}) {
+  const [friends, setFriends] = useState<FriendResponse[]>([]);
+  const [inviting, setInviting] = useState<number | null>(null);
+  const [invited, setInvited] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (visible && token) {
+      api.friends.list(token).then(f => setFriends(f.filter(fr => fr.status === "accepted"))).catch(() => {});
+      setInvited(new Set());
+    }
+  }, [visible]);
+
+  async function invite(userId: number) {
+    if (!habitId) return;
+    setInviting(userId);
+    try {
+      await api.sharedHabits.invite(token, habitId, userId);
+      setInvited(prev => new Set(prev).add(userId));
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Failed to invite");
+    } finally {
+      setInviting(null);
+    }
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" }}>
+        <View style={{ backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 40, maxHeight: "70%" }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "700" }}>Share "{habitName}"</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Text style={{ color: colors.mutedFg, fontSize: 16 }}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          {friends.length === 0 ? (
+            <Text style={{ color: colors.mutedFg, textAlign: "center", paddingVertical: 24 }}>No accepted friends to invite.</Text>
+          ) : (
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {friends.map((f, idx) => {
+                const done = invited.has(f.id);
+                return (
+                  <View key={f.id} style={{ flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+                    <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: avatarColors[idx % avatarColors.length], alignItems: "center", justifyContent: "center", marginRight: 12 }}>
+                      <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>{(f.full_name ?? f.email)[0].toUpperCase()}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.foreground, fontWeight: "600", fontSize: 14 }}>{f.full_name ?? f.email}</Text>
+                      <Text style={{ color: colors.mutedFg, fontSize: 12 }}>{f.email}</Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => !done && invite(f.id)}
+                      style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.md, backgroundColor: done ? colors.muted : colors.primary }}
+                      disabled={inviting === f.id || done}
+                    >
+                      {inviting === f.id
+                        ? <ActivityIndicator size="small" color="#fff" />
+                        : <Text style={{ color: done ? colors.mutedFg : "#fff", fontWeight: "600", fontSize: 13 }}>{done ? "Invited" : "Invite"}</Text>
+                      }
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function ProgressBar({ value, total }: { value: number; total: number }) {
   const pct = total > 0 ? Math.round((value / total) * 100) : 0;
   return (
@@ -559,20 +713,37 @@ const pb = StyleSheet.create({
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const [token, setToken] = useState<string | null>(null);
-  const [user, setUser] = useState<{ full_name?: string | null; email?: string } | null>(null);
+  const [user, setUser] = useState<{ id?: number; full_name?: string | null; email?: string } | null>(null);
   const [habits, setHabits] = useState<HabitState[]>([]);
   const [heatmapCounts, setHeatmapCounts] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [addVisible, setAddVisible] = useState(false);
   const [editHabit, setEditHabit] = useState<HabitResponse | null>(null);
+  const [shareHabitId, setShareHabitId] = useState<number | null>(null);
+  const [shareHabitName, setShareHabitName] = useState("");
+  const [shareInfoMap, setShareInfoMap] = useState<Map<number, ShareInfo>>(new Map());
+  const [dailyInsight, setDailyInsight] = useState<string | null>(null);
 
   useEffect(() => { getToken().then(t => { setToken(t); if (t) init(t); }); }, []);
+
+  async function loadDailyInsight(t: string, userId: number) {
+    const today = todayStr();
+    const key = `adet_insight_${userId}_${today}`;
+    try {
+      const cached = await SecureStore.getItemAsync(key);
+      if (cached) { setDailyInsight(cached); return; }
+      const { insight } = await api.ai.dailyInsight(t);
+      setDailyInsight(insight);
+      await SecureStore.setItemAsync(key, insight.slice(0, 2048));
+    } catch {}
+  }
 
   async function init(t: string) {
     try {
       const [rawHabits, heatmap, me] = await Promise.all([api.habits.list(t), api.analytics.heatmap(t), api.auth.me(t)]);
       setUser(me);
+      loadDailyInsight(t, me.id);
       const counts = new Map<string, number>();
       heatmap.days.forEach(d => { if (d.count > 0) counts.set(d.date, d.count); });
       setHeatmapCounts(counts);
@@ -589,7 +760,12 @@ export default function DashboardScreen() {
         } catch { return { habit: h, dates: new Set<string>(), note: "", streak: 0, index: idx }; }
       }));
       setHabits(states);
-    } catch (e: any) { Alert.alert("Error", e?.message); }
+      // load share info for all habits in parallel
+      const infos = await Promise.allSettled(rawHabits.map(h => api.sharedHabits.shareInfo(t, h.id)));
+      const infoMap = new Map<number, ShareInfo>();
+      infos.forEach((r, i) => { if (r.status === "fulfilled") infoMap.set(rawHabits[i].id, r.value); });
+      setShareInfoMap(infoMap);
+    } catch { Alert.alert("Error", "Failed to load habits. Please try again."); }
     finally { setLoading(false); setRefreshing(false); }
   }
 
@@ -602,6 +778,13 @@ export default function DashboardScreen() {
         dates: (() => { const s = new Set(h.dates); done ? s.delete(today) : s.add(today); return s; })(),
       } : h
     ));
+    setHeatmapCounts(prev => {
+      const next = new Map(prev);
+      const cur = next.get(today) ?? 0;
+      const newVal = done ? Math.max(0, cur - 1) : cur + 1;
+      if (newVal === 0) next.delete(today); else next.set(today, newVal);
+      return next;
+    });
     try {
       if (done) await api.habits.removeCompletion(token, hs.habit.id, today);
       else await api.habits.complete(token, hs.habit.id, today);
@@ -638,7 +821,7 @@ export default function DashboardScreen() {
           <View style={{ flex: 1 }}>
             <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>AI Insight</Text>
             <Text style={{ color: "rgba(255,255,255,0.85)", fontSize: 13, marginTop: 2 }}>
-              You're building great habits! Keep tracking to unlock personalized insights.
+              {dailyInsight ?? "Loading your personalized insight…"}
             </Text>
           </View>
           <TrendingUp size={18} color="rgba(255,255,255,0.7)" />
@@ -678,7 +861,23 @@ export default function DashboardScreen() {
                 <Text style={{ color: colors.mutedFg, textAlign: "center", fontSize: 14 }}>Tap + to create your first habit</Text>
               </View>
             ) : habits.map(hs => (
-              <HabitCard key={hs.habit.id} hs={hs} token={token} onToggle={() => toggleCompletion(hs)} onEdit={() => setEditHabit(hs.habit)} />
+              <HabitCard
+                key={hs.habit.id}
+                hs={hs}
+                token={token}
+                shareInfo={shareInfoMap.get(hs.habit.id)}
+                onToggle={() => toggleCompletion(hs)}
+                onEdit={() => setEditHabit(hs.habit)}
+                onShare={() => { setShareHabitId(hs.habit.id); setShareHabitName(hs.habit.name); }}
+                onLeave={async () => {
+                  const info = shareInfoMap.get(hs.habit.id);
+                  if (!info?.group_id) return;
+                  try {
+                    await api.sharedHabits.leave(token, info.group_id);
+                    init(token);
+                  } catch (e: any) { Alert.alert("Error", e?.message); }
+                }}
+              />
             ))}
           </>
         )}
@@ -686,6 +885,13 @@ export default function DashboardScreen() {
 
       <AddModal visible={addVisible} token={token} onClose={() => setAddVisible(false)} onAdded={() => { setAddVisible(false); init(token); }} />
       <EditModal visible={!!editHabit} habit={editHabit} token={token} onClose={() => setEditHabit(null)} onSaved={() => { setEditHabit(null); init(token); }} onDeleted={() => { setEditHabit(null); init(token); }} />
+      <ShareModal
+        visible={shareHabitId !== null}
+        habitId={shareHabitId}
+        habitName={shareHabitName}
+        token={token}
+        onClose={() => setShareHabitId(null)}
+      />
     </View>
   );
 }

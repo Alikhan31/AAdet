@@ -1,6 +1,6 @@
 import * as SecureStore from "expo-secure-store";
 
-const KEY = "habitflow_token";
+const KEY = "adet_token";
 
 export async function getToken(): Promise<string | null> {
   return SecureStore.getItemAsync(KEY);

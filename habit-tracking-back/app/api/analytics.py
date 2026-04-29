@@ -20,10 +20,15 @@ from app.schemas.analytics import (
     HabitCorrelationEdge,
     HeatmapResponse,
     HeatmapDay,
+    HabitAnalyticsItem,
+    HabitDayCount,
 )
+from fastapi.encoders import jsonable_encoder
+
 from app.api.deps import get_current_user
 from app.services.analytics import get_or_create_user_stats, recompute_streaks_and_xp
 from app.services.analytics import compute_habit_streaks, build_badges
+from app.core.redis import cache_get, cache_set
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -52,6 +57,11 @@ async def get_analytics_summary(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    cache_key = f"cache:analytics:summary:{current_user.id}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return cached
+
     stats = await recompute_streaks_and_xp(current_user.id, db)
     today = date.today()
     week_start = today - timedelta(days=today.weekday())  # Monday
@@ -142,7 +152,7 @@ async def get_analytics_summary(
         best_habit_longest_streak=best_habit_longest_streak,
     )
 
-    return AnalyticsSummaryResponse(
+    response = AnalyticsSummaryResponse(
         stats=UserStatsResponse.model_validate(stats),
         completions_today=completions_today,
         completions_this_week=completions_this_week,
@@ -154,6 +164,8 @@ async def get_analytics_summary(
         badges=badges,
         habit_streaks=habit_streaks,
     )
+    await cache_set(cache_key, jsonable_encoder(response), ttl=300)
+    return response
 
 
 @router.get("/leaderboard", response_model=LeaderboardResponse)
@@ -165,6 +177,10 @@ async def get_leaderboard(
     period: Literal["total", "month"] = Query("total"),
     month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"),
 ):
+    cache_key = f"cache:analytics:leaderboard:{current_user.id}:{friends_only}:{period}:{month or 'none'}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return cached
     """Leaderboard with total XP or month XP. Global mode is capped to top 10."""
     if not friends_only:
         limit = min(limit, 10)
@@ -276,13 +292,15 @@ async def get_leaderboard(
                 is_me=row.id == current_user.id,
             )
         )
-    return LeaderboardResponse(
+    lb_response = LeaderboardResponse(
         period=period,
         month=month_value if period == "month" else None,
         entries=out,
         me_rank=me_rank,
         me_xp=me_xp,
     )
+    await cache_set(cache_key, jsonable_encoder(lb_response), ttl=300)
+    return lb_response
 
 
 # ---------------------------------------------------------------------------
@@ -493,16 +511,34 @@ async def get_heatmap(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     days: int = Query(365, ge=30, le=730, description="Number of past days to include"),
+    user_id: int | None = Query(None, description="View another user's heatmap (must be a friend)"),
 ):
     """Returns daily habit completion counts for the GitHub-style heatmap."""
+    target_id = current_user.id
+    if user_id and user_id != current_user.id:
+        fr = await db.execute(
+            select(Friendship).where(
+                Friendship.status == "accepted",
+                (
+                    (Friendship.user_id == current_user.id) & (Friendship.friend_id == user_id)
+                ) | (
+                    (Friendship.user_id == user_id) & (Friendship.friend_id == current_user.id)
+                ),
+            )
+        )
+        if fr.scalar_one_or_none() is None:
+            raise HTTPException(status_code=403, detail="Not friends with this user")
+        target_id = user_id
+
     since = date.today() - timedelta(days=days)
 
     result = await db.execute(
         select(HabitCompletion.completed_date, func.count(HabitCompletion.id).label("cnt"))
         .join(Habit, Habit.id == HabitCompletion.habit_id)
         .where(
-            Habit.user_id == current_user.id,
+            Habit.user_id == target_id,
             HabitCompletion.completed_date >= since,
+            HabitCompletion.count > 0,
         )
         .group_by(HabitCompletion.completed_date)
         .order_by(HabitCompletion.completed_date)
@@ -511,3 +547,80 @@ async def get_heatmap(
     return HeatmapResponse(
         days=[HeatmapDay(date=row.completed_date, count=row.cnt) for row in rows]
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-habit analytics
+# ---------------------------------------------------------------------------
+
+@router.get("/habits", response_model=list[HabitAnalyticsItem])
+async def get_habit_analytics(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(90, ge=14, le=365, description="Lookback window"),
+):
+    """Returns completion stats per habit: streak, rate, last-30-days chart."""
+    today = date.today()
+    since = today - timedelta(days=days)
+
+    habits_result = await db.execute(select(Habit).where(Habit.user_id == current_user.id))
+    habits = habits_result.scalars().all()
+    if not habits:
+        return []
+
+    habit_ids = [h.id for h in habits]
+
+    comps_result = await db.execute(
+        select(HabitCompletion.habit_id, HabitCompletion.completed_date)
+        .where(
+            HabitCompletion.habit_id.in_(habit_ids),
+            HabitCompletion.completed_date >= since,
+        )
+    )
+    habit_dates: dict[int, set[date]] = defaultdict(set)
+    for hid, dt in comps_result.all():
+        habit_dates[hid].add(dt)
+
+    items: list[HabitAnalyticsItem] = []
+    for h in habits:
+        dates = habit_dates.get(h.id, set())
+
+        # Current streak (consecutive days ending today)
+        current_streak = 0
+        d = today
+        while d in dates:
+            current_streak += 1
+            d -= timedelta(days=1)
+
+        # Longest consecutive streak in window
+        longest_streak = 0
+        streak = 0
+        prev_d: date | None = None
+        for dt in sorted(dates):
+            if prev_d is not None and (dt - prev_d).days == 1:
+                streak += 1
+            else:
+                streak = 1
+            longest_streak = max(longest_streak, streak)
+            prev_d = dt
+
+        # Last 30 days daily 0/1
+        last_30 = [
+            HabitDayCount(date=str(today - timedelta(days=i)), count=1 if (today - timedelta(days=i)) in dates else 0)
+            for i in range(29, -1, -1)
+        ]
+
+        items.append(HabitAnalyticsItem(
+            habit_id=h.id,
+            habit_name=h.name,
+            category=h.category,
+            icon=h.icon,
+            current_streak=current_streak,
+            longest_streak=longest_streak,
+            total_completions=len(dates),
+            completion_rate=round(len(dates) / days, 3),
+            last_30_days=last_30,
+        ))
+
+    items.sort(key=lambda x: x.total_completions, reverse=True)
+    return items

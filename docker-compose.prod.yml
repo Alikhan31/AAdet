@@ -1,0 +1,38 @@
+# Production override — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Copy .env.server.example → .env.server and fill in values before running.
+
+services:
+  postgres:
+    ports: []          # not exposed publicly in production
+    environment:
+      POSTGRES_USER: habit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: habit_tracking
+    restart: always
+
+  redis:
+    ports: []          # not exposed publicly in production
+    restart: always
+
+  api:
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://habit:${POSTGRES_PASSWORD}@postgres:5432/habit_tracking
+      REDIS_URL: redis://redis:6379/0
+
+  celery-worker:
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://habit:${POSTGRES_PASSWORD}@postgres:5432/habit_tracking
+      REDIS_URL: redis://redis:6379/0
+
+  front:
+    restart: always
+    build:
+      context: ./habit-tracking-front
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://api:8000
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://api:8000

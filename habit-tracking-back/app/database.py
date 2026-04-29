@@ -53,6 +53,50 @@ def _pre_create_cleanup(conn):
     ))
     conn.execute(text("ALTER TABLE habits ADD COLUMN IF NOT EXISTS category VARCHAR(64)"))
     conn.execute(text("ALTER TABLE habits ADD COLUMN IF NOT EXISTS icon VARCHAR(64)"))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            data JSONB NOT NULL DEFAULT '{}',
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+    """))
+    # Email verification columns — existing users stay verified
+    conn.execute(text(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT TRUE"
+    ))
+    conn.execute(text(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token VARCHAR(255)"
+    ))
+    conn.execute(text(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token_expires TIMESTAMP WITH TIME ZONE"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_users_verification_token ON users (verification_token)"
+    ))
+    # Shared habits tables
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS shared_habit_groups (
+            id SERIAL PRIMARY KEY,
+            original_habit_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+            owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+    """))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shg_original_habit_id ON shared_habit_groups (original_habit_id)"))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS shared_habit_members (
+            id SERIAL PRIMARY KEY,
+            group_id INTEGER NOT NULL REFERENCES shared_habit_groups(id) ON DELETE CASCADE,
+            invitee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status VARCHAR(16) NOT NULL DEFAULT 'pending',
+            member_habit_id INTEGER REFERENCES habits(id) ON DELETE SET NULL,
+            invited_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            responded_at TIMESTAMP WITH TIME ZONE,
+            UNIQUE(group_id, invitee_id)
+        )
+    """))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shm_invitee_id ON shared_habit_members (invitee_id)"))
 
 
 def _apply_pending_migrations(conn):
@@ -64,6 +108,14 @@ def _apply_pending_migrations(conn):
         if "google_id" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN google_id VARCHAR(255)"))
             conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)"))
+        if "is_verified" not in columns:
+            # Existing users get verified=true so they don't lose access
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_verified BOOLEAN NOT NULL DEFAULT 1"))
+        if "verification_token" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN verification_token VARCHAR(255)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_verification_token ON users (verification_token)"))
+        if "verification_token_expires" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN verification_token_expires DATETIME"))
         # Drop old unique friendship index; now using directional (non-unique) storage
         conn.execute(text("DROP INDEX IF EXISTS ix_friendships_user_friend"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_friendships_user_friend ON friendships (user_id, friend_id)"))
@@ -93,6 +145,38 @@ def _apply_pending_migrations(conn):
             conn.execute(text("ALTER TABLE habits ADD COLUMN category VARCHAR(64)"))
         if "icon" not in habit_cols3:
             conn.execute(text("ALTER TABLE habits ADD COLUMN icon VARCHAR(64)"))
+        # user_profiles table
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                data TEXT NOT NULL DEFAULT '{}',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        # Shared habits tables for SQLite
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS shared_habit_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_habit_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+                owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shg_original_habit_id ON shared_habit_groups (original_habit_id)"))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS shared_habit_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER NOT NULL REFERENCES shared_habit_groups(id) ON DELETE CASCADE,
+                invitee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                member_habit_id INTEGER REFERENCES habits(id) ON DELETE SET NULL,
+                invited_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                responded_at DATETIME,
+                UNIQUE(group_id, invitee_id)
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shm_invitee_id ON shared_habit_members (invitee_id)"))
 
 
 async def init_db() -> None:

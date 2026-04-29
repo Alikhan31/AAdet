@@ -14,8 +14,26 @@ from app.schemas.habit import (
     HabitCompletionResponse,
 )
 from app.api.deps import get_current_user
-from app.services.activity_feed import create_event as create_activity_event
 from app.services.analytics import recompute_streaks_and_xp
+from app.services.activity_feed import create_event as _create_event_sync
+from app.core.redis import cache_delete
+
+
+def _dispatch_activity(user_id: int, event_type: str, payload: dict) -> None:
+    """Send activity event to Celery if Redis is configured, otherwise skip
+    (will be picked up by sync fallback path below)."""
+    from app.config import get_settings
+    if get_settings().redis_url:
+        from app.tasks.habit_tasks import create_activity_event_task
+        create_activity_event_task.delay(user_id, event_type, payload)
+
+
+async def _invalidate_analytics(user_id: int) -> None:
+    await cache_delete(
+        f"cache:analytics:summary:{user_id}",
+        f"cache:analytics:leaderboard:{user_id}:False:total:none",
+        f"cache:analytics:leaderboard:{user_id}:True:total:none",
+    )
 
 router = APIRouter(prefix="/habits", tags=["habits"])
 
@@ -102,6 +120,7 @@ async def create_habit(
     await db.flush()
     await db.refresh(habit)
     await recompute_streaks_and_xp(current_user.id, db)
+    await _invalidate_analytics(current_user.id)
     return habit
 
 
@@ -154,6 +173,7 @@ async def delete_habit(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Habit not found")
     await db.delete(habit)
     await recompute_streaks_and_xp(current_user.id, db)
+    await _invalidate_analytics(current_user.id)
     return None
 
 
@@ -218,12 +238,12 @@ async def add_completion(
     db.add(completion)
     await db.flush()
     await db.refresh(completion)
-    await create_activity_event(
+    _dispatch_activity(
         current_user.id, "habit_completed",
         {"habit_id": habit_id, "habit_name": habit.name, "completed_date": str(payload.completed_date)},
-        db,
     )
     await recompute_streaks_and_xp(current_user.id, db)
+    await _invalidate_analytics(current_user.id)
     return completion
 
 
@@ -259,12 +279,12 @@ async def complete_today(
     db.add(completion)
     await db.flush()
     await db.refresh(completion)
-    await create_activity_event(
+    _dispatch_activity(
         current_user.id, "habit_completed",
         {"habit_id": habit_id, "habit_name": habit.name, "completed_date": str(today)},
-        db,
     )
     await recompute_streaks_and_xp(current_user.id, db)
+    await _invalidate_analytics(current_user.id)
     return completion
 
 
@@ -291,8 +311,16 @@ async def update_completion(
     )
     completion = result.scalar_one_or_none()
     if completion is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Completion not found")
-    completion.note = payload.note
+        # Create a count=0 "skip" entry so the note is persisted even without a completion
+        completion = HabitCompletion(
+            habit_id=habit_id,
+            completed_date=completed_date,
+            count=0,
+            note=payload.note,
+        )
+        db.add(completion)
+    else:
+        completion.note = payload.note
     await db.flush()
     await db.refresh(completion)
     return completion
@@ -331,6 +359,7 @@ async def remove_completion(
         )
     )
     await recompute_streaks_and_xp(current_user.id, db)
+    await _invalidate_analytics(current_user.id)
     return None
 
 

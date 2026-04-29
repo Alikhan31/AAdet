@@ -103,3 +103,22 @@ class HeatmapDay(BaseModel):
 
 class HeatmapResponse(BaseModel):
     days: list[HeatmapDay]
+
+
+# --- Per-habit analytics ---
+
+class HabitDayCount(BaseModel):
+    date: str   # ISO string "YYYY-MM-DD"
+    count: int  # 0 or 1
+
+
+class HabitAnalyticsItem(BaseModel):
+    habit_id: int
+    habit_name: str
+    category: str | None
+    icon: str | None
+    current_streak: int
+    longest_streak: int
+    total_completions: int
+    completion_rate: float      # completions / days in window
+    last_30_days: list[HabitDayCount]   # daily 0/1 for mini chart

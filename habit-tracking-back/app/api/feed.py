@@ -24,23 +24,27 @@ async def get_activity_feed(
     db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
-    friends_only: bool = Query(False, description="If true, only friends' activities; else mine + friends"),
+    friends_only: bool = Query(False, description="Only friends' activities"),
+    mine_only: bool = Query(False, description="Only my own activities"),
 ):
-    fr_result = await db.execute(
-        select(Friendship).where(
-            or_(Friendship.user_id == current_user.id, Friendship.friend_id == current_user.id),
-            Friendship.status == "accepted",
-        )
-    )
-    friend_ids = set()
-    for fs in fr_result.scalars().all():
-        other = fs.friend_id if fs.user_id == current_user.id else fs.user_id
-        friend_ids.add(other)
-
-    if friends_only:
-        author_ids = list(friend_ids)
+    if mine_only:
+        author_ids = [current_user.id]
     else:
-        author_ids = [current_user.id] + list(friend_ids)
+        fr_result = await db.execute(
+            select(Friendship).where(
+                or_(Friendship.user_id == current_user.id, Friendship.friend_id == current_user.id),
+                Friendship.status == "accepted",
+            )
+        )
+        friend_ids = set()
+        for fs in fr_result.scalars().all():
+            other = fs.friend_id if fs.user_id == current_user.id else fs.user_id
+            friend_ids.add(other)
+
+        if friends_only:
+            author_ids = list(friend_ids)
+        else:
+            author_ids = [current_user.id] + list(friend_ids)
 
     if not author_ids:
         return []

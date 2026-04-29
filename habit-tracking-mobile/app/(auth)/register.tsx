@@ -39,7 +39,7 @@ export default function RegisterScreen() {
           <View style={s.logoIcon}>
             <Sparkles size={36} color="#fff" />
           </View>
-          <Text style={s.appName}>HabitFlow</Text>
+          <Text style={s.appName}>Adet</Text>
           <Text style={s.tagline}>Build habits that last</Text>
         </View>
 

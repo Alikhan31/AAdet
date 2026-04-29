@@ -7,6 +7,7 @@ import { api } from "../../lib/api";
 import { colors, card, radius } from "../../lib/theme";
 
 interface Message { role: "user" | "assistant"; text: string; time: Date; }
+interface HistoryItem { role: string; content: string; }
 
 const QUICK_QUESTIONS = [
   { Icon: Lightbulb, text: "How can I improve my morning routine?" },
@@ -19,9 +20,9 @@ export default function AICoachScreen() {
   const insets = useSafeAreaInsets();
   const [token, setToken] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [userName, setUserName] = useState("there");
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
@@ -31,16 +32,13 @@ export default function AICoachScreen() {
         try {
           const [me, summary] = await Promise.all([api.auth.me(t), api.analytics.summary(t)]);
           const name = me.full_name?.split(" ")[0] ?? me.email.split("@")[0];
-          setUserName(name);
           const consistency = summary.completions_this_week > 0
-            ? Math.round((summary.completions_this_week / 7) * 100) : 0;
-          setMessages([{
-            role: "assistant",
-            text: `Hey ${name}! I am your AI habit coach. I have been analyzing your recent progress — you are doing great with a ${consistency}% consistency score this week! How can I help you today?`,
-            time: new Date(),
-          }]);
+            ? Math.round((summary.completions_this_week / Math.max(summary.possible_this_week, 1)) * 100)
+            : 0;
+          const greeting = `Hey ${name}! I'm your AI habit coach. I've been looking at your recent progress — you're at a ${consistency}% completion rate this week! How can I help you today?`;
+          setMessages([{ role: "assistant", text: greeting, time: new Date() }]);
         } catch {
-          setMessages([{ role: "assistant", text: "Hey! I am your AI habit coach. How can I help you today?", time: new Date() }]);
+          setMessages([{ role: "assistant", text: "Hey! I'm your AI habit coach. How can I help you today?", time: new Date() }]);
         }
       }
     });
@@ -52,26 +50,24 @@ export default function AICoachScreen() {
 
   async function sendMessage(text?: string) {
     const msg = (text ?? input).trim();
-    if (!msg) return;
+    if (!msg || !token) return;
     setInput("");
+
     const userMsg: Message = { role: "user", text: msg, time: new Date() };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
 
-    // Simple AI responses based on keywords
-    await new Promise(r => setTimeout(r, 800));
-    let reply = "That's a great question! Consistency is key. Try to make your habits small and achievable, and track them daily.";
-    const lower = msg.toLowerCase();
-    if (lower.includes("morning")) reply = "Start your morning routine with a 5-minute win — something easy like drinking water or stretching. This builds momentum for the rest of your habits.";
-    else if (lower.includes("streak") || lower.includes("drop")) reply = "Streaks can drop due to travel, illness, or unexpected events. The key is to not miss twice in a row. A 1-day miss is an accident; a 2-day miss is the start of a new (bad) habit.";
-    else if (lower.includes("meditat")) reply = "Research shows morning is often best for meditation as it sets a calm tone for the day. Even 5-10 minutes after waking up can make a significant difference.";
-    else if (lower.includes("motivat")) reply = "You are already doing amazing by tracking your habits! Remember: you don't need motivation, you need discipline. Motivation is fleeting, but systems and routines last. Keep going! 💪";
-    else if (lower.includes("sleep")) reply = "Sleep is the foundation of all good habits. Aim for 7-8 hours. Try going to bed at the same time every night — your habit tracker can help you track this too!";
-
-    setMessages(prev => [...prev, { role: "assistant", text: reply, time: new Date() }]);
-    setLoading(false);
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    try {
+      const { reply } = await api.ai.chat(token, msg, history);
+      setHistory(prev => [...prev, { role: "user", content: msg }, { role: "assistant", content: reply }]);
+      setMessages(prev => [...prev, { role: "assistant", text: reply, time: new Date() }]);
+    } catch {
+      setMessages(prev => [...prev, { role: "assistant", text: "Sorry, I couldn't reach the AI service. Please try again.", time: new Date() }]);
+    } finally {
+      setLoading(false);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    }
   }
 
   return (
@@ -112,7 +108,7 @@ export default function AICoachScreen() {
           {loading && (
             <View style={ai.msgRow}>
               <View style={[ai.botAvatar, { width: 32, height: 32, marginRight: 8, alignSelf: "flex-end" }]}>
-                <Text style={{ fontSize: 16 }}>🤖</Text>
+                <Bot size={16} color={colors.primary} />
               </View>
               <View style={ai.bubbleBot}>
                 <Text style={{ color: colors.mutedFg, fontSize: 14 }}>Thinking...</Text>
