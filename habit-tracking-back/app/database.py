@@ -44,59 +44,67 @@ def _pre_create_cleanup(conn):
     conn.execute(text("DROP INDEX IF EXISTS ix_reactions_event_id"))
     conn.execute(text("DROP INDEX IF EXISTS ix_reactions_event_id_2"))  # safety
     conn.execute(text("DROP INDEX IF EXISTS ix_feed_comments_event_id"))  # recreated by create_all
-    # Add new columns to existing tables (IF NOT EXISTS is safe to repeat)
-    conn.execute(text(
-        "ALTER TABLE habits ADD COLUMN IF NOT EXISTS days_of_week JSONB DEFAULT '[0,1,2,3,4,5,6]'"
-    ))
-    conn.execute(text(
-        "ALTER TABLE habits ADD COLUMN IF NOT EXISTS visibility VARCHAR(16) DEFAULT 'friends' NOT NULL"
-    ))
-    conn.execute(text("ALTER TABLE habits ADD COLUMN IF NOT EXISTS category VARCHAR(64)"))
-    conn.execute(text("ALTER TABLE habits ADD COLUMN IF NOT EXISTS icon VARCHAR(64)"))
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS user_profiles (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-            data JSONB NOT NULL DEFAULT '{}',
-            updated_at TIMESTAMP DEFAULT NOW()
-        )
-    """))
-    # Email verification columns — existing users stay verified
-    conn.execute(text(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT TRUE"
-    ))
-    conn.execute(text(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token VARCHAR(255)"
-    ))
-    conn.execute(text(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token_expires TIMESTAMP WITH TIME ZONE"
-    ))
-    conn.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_users_verification_token ON users (verification_token)"
-    ))
-    # Shared habits tables
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS shared_habit_groups (
-            id SERIAL PRIMARY KEY,
-            original_habit_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
-            owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        )
-    """))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shg_original_habit_id ON shared_habit_groups (original_habit_id)"))
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS shared_habit_members (
-            id SERIAL PRIMARY KEY,
-            group_id INTEGER NOT NULL REFERENCES shared_habit_groups(id) ON DELETE CASCADE,
-            invitee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            status VARCHAR(16) NOT NULL DEFAULT 'pending',
-            member_habit_id INTEGER REFERENCES habits(id) ON DELETE SET NULL,
-            invited_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            responded_at TIMESTAMP WITH TIME ZONE,
-            UNIQUE(group_id, invitee_id)
-        )
-    """))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shm_invitee_id ON shared_habit_members (invitee_id)"))
+    # Only alter existing tables — skip if table doesn't exist yet (fresh DB)
+    habits_exists = conn.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='habits')"
+    )).scalar()
+    if habits_exists:
+        conn.execute(text(
+            "ALTER TABLE habits ADD COLUMN IF NOT EXISTS days_of_week JSONB DEFAULT '[0,1,2,3,4,5,6]'"
+        ))
+        conn.execute(text(
+            "ALTER TABLE habits ADD COLUMN IF NOT EXISTS visibility VARCHAR(16) DEFAULT 'friends' NOT NULL"
+        ))
+        conn.execute(text("ALTER TABLE habits ADD COLUMN IF NOT EXISTS category VARCHAR(64)"))
+        conn.execute(text("ALTER TABLE habits ADD COLUMN IF NOT EXISTS icon VARCHAR(64)"))
+
+    users_exists = conn.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='users')"
+    )).scalar()
+    if users_exists:
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT TRUE"
+        ))
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token VARCHAR(255)"
+        ))
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token_expires TIMESTAMP WITH TIME ZONE"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_users_verification_token ON users (verification_token)"
+        ))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                data JSONB NOT NULL DEFAULT '{}',
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """))
+        # Shared habits tables
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS shared_habit_groups (
+                id SERIAL PRIMARY KEY,
+                original_habit_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+                owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shg_original_habit_id ON shared_habit_groups (original_habit_id)"))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS shared_habit_members (
+                id SERIAL PRIMARY KEY,
+                group_id INTEGER NOT NULL REFERENCES shared_habit_groups(id) ON DELETE CASCADE,
+                invitee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                member_habit_id INTEGER REFERENCES habits(id) ON DELETE SET NULL,
+                invited_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                responded_at TIMESTAMP WITH TIME ZONE,
+                UNIQUE(group_id, invitee_id)
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_shm_invitee_id ON shared_habit_members (invitee_id)"))
 
 
 def _apply_pending_migrations(conn):
