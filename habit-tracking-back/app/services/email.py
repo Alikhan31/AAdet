@@ -1,6 +1,4 @@
-import aiosmtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import httpx
 
 from app.config import get_settings
 
@@ -8,19 +6,12 @@ settings = get_settings()
 
 
 async def send_verification_email(to_email: str, token: str) -> None:
-    """Send email verification link. Silently skips if SMTP is not configured."""
-    if not settings.smtp_user or not settings.smtp_password:
-        # Dev mode: print the link to console instead
-        link = f"{settings.frontend_url}/verify-email?token={token}"
-        print(f"\n[DEV] Verification link for {to_email}:\n  {link}\n")
-        return
-
+    """Send email verification link via SendGrid API or print to console in dev mode."""
     link = f"{settings.frontend_url}/verify-email?token={token}"
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Confirm your Adet account"
-    msg["From"] = settings.smtp_from
-    msg["To"] = to_email
+    if not settings.sendgrid_api_key:
+        print(f"\n[DEV] Verification link for {to_email}:\n  {link}\n")
+        return
 
     text_body = f"Click the link to verify your email:\n\n{link}\n\nThe link expires in 24 hours."
     html_body = f"""
@@ -38,14 +29,24 @@ async def send_verification_email(to_email: str, token: str) -> None:
     </div>
     """
 
-    msg.attach(MIMEText(text_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
+    payload = {
+        "personalizations": [{"to": [{"email": to_email}]}],
+        "from": {"email": settings.smtp_from or "noreply@adet.app"},
+        "subject": "Confirm your Adet account",
+        "content": [
+            {"type": "text/plain", "value": text_body},
+            {"type": "text/html", "value": html_body},
+        ],
+    }
 
-    await aiosmtplib.send(
-        msg,
-        hostname=settings.smtp_host,
-        port=settings.smtp_port,
-        username=settings.smtp_user,
-        password=settings.smtp_password,
-        start_tls=True,
-    )
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {settings.sendgrid_api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()

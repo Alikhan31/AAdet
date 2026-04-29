@@ -27,11 +27,8 @@ class Settings(BaseSettings):
     grok_api_key: str | None = None
     ai_chat_provider: str = "grok"  # "grok" | "claude" | "gemini"
 
-    # Email / SMTP
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    smtp_user: str | None = None
-    smtp_password: str | None = None
+    # Email
+    sendgrid_api_key: str | None = None
     smtp_from: str = "noreply@adet.app"
 
     # Frontend URL for building verification links
