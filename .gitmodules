@@ -1,0 +1,3 @@
+[submodule "habit-tracking-front"]
+	path = habit-tracking-front
+	url = https://github.com/Alikhan31/Adet-front.git
