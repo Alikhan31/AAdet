@@ -1,0 +1,30 @@
+# Secrets — never commit these
+.env
+.env.
+.env.server
+.env.local
+.env.production.local
+habit-tracking-back/.env
+habit-tracking-front/.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+habit-tracking-front/.next/
+habit-tracking-front/out/
+
+# Mobile
+habit-tracking-mobile/node_modules/
+habit-tracking-mobile/.expo/
+
+# OS
+.DS_Store
+*.log
